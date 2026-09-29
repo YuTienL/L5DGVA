@@ -87,12 +87,15 @@ command -v "$PYTHON" >/dev/null 2>&1 || {
 # with no remote and no CI runner involved. CI stays the authoritative gate
 # once the remote has branches; this is the local one that exists now.
 #
-# WHICH CHECKS. import-sanity + self-audit -- roughly 50s combined, the two
-# that are both fast and specifically about the harness's OWN scripts.
-# cli-help-sanity is deliberately NOT in the default set: it spawns a real
-# `--help` subprocess per leaf subcommand and takes ~7 minutes, which is a
-# gate people would learn to bypass. It stays part of the full manual/CI
-# pass. Override with DV_HARNESS_SELF_TEST_CHECKS (comma-separated).
+# WHICH CHECKS. import-sanity + self-audit + constitution -- roughly 51s
+# combined, all three fast and specifically about the harness's OWN scripts
+# (constitution added M8 Cohort 5/GAP-M8-007: this hook is its first real
+# automatic trigger -- previously check_constitution_intact() was reachable
+# only on demand). cli-help-sanity is deliberately NOT in the default set:
+# it spawns a real `--help` subprocess per leaf subcommand and takes ~7
+# minutes, which is a gate people would learn to bypass. It stays part of
+# the full manual/CI pass. Override with DV_HARNESS_SELF_TEST_CHECKS
+# (comma-separated).
 #
 # FAIL-CLOSED, unlike the governance gate above. A missing python or a
 # missing script still fails OPEN (an unrelated environment problem must not
@@ -120,7 +123,7 @@ if [ ! -f "$SELF_TEST" ]; then
     exit 0
 fi
 
-CHECKS=${DV_HARNESS_SELF_TEST_CHECKS:-"import-sanity,self-audit"}
+CHECKS=${DV_HARNESS_SELF_TEST_CHECKS:-"import-sanity,self-audit,constitution"}
 ONLY_ARGS=""
 OLD_IFS=$IFS
 IFS=,

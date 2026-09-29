@@ -842,6 +842,19 @@ def main():
              "representative payload to prove the SCRIPT works (SCRIPT_SMOKE_PASS/FAIL) -- "
              "not a verdict on current state, distinct from PASS/FAIL/NO_SOURCE_DATA.")
 
+    # M8 Cohort 5 (GAP-M8-007/GAP-M8-008): the manual/on-demand production
+    # caller for both constitution_gate.check_constitution_intact() (textual
+    # anti-drift) and the new evaluate_final_compliance() composite -- the
+    # automatic-invocation edge itself is tools/testing/self_test.py's new
+    # "constitution" check, wired into tools/git-hooks/pre-push's default set.
+    sub.add_parser("constitution-check",
+        help="Check the L5DGVA Constitution's textual intactness (Article 0, the 5 dimensions, "
+             "the Anti-Drift marker, CLAUDE.md's own pointer and its position) and print the "
+             "13-sub-criterion Final Constitutional Acceptance composite (VERDICT need not be "
+             "PASS at this wave -- see dv_harness/constitution_gate.py). Exits non-zero only on "
+             "a real textual-intactness FAIL, never on an honestly incomplete final-compliance "
+             "composite.")
+
     psignoff = sub.add_parser("signoff-export", help="One-click final signoff export: bundle vPlan/"
                                                        "blackboard signoff+regression+requirements+findings "
                                                        "state/stage-execution telemetry/pattern registry/"
@@ -4856,6 +4869,20 @@ def main():
         result = self_audit.run_self_audit(h.root, args.gate, smoke=args.smoke)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         raise SystemExit(0 if result["summary"]["fail"] == 0 and result["summary"]["smoke_fail"] == 0 else 1)
+    elif args.cmd == "constitution-check":
+        from . import constitution_gate as cg
+        intact = cg.check_constitution_intact(h.root)
+        final = cg.evaluate_final_compliance(h.root)
+        payload = {
+            "intact_status": intact.status, "intact_reasons": intact.reasons,
+            "final_compliance": {
+                "overall_status": final.overall_status,
+                "sub_criteria": [{"name": s.name, "status": s.status, "evidence": s.evidence}
+                                  for s in final.sub_criteria],
+            },
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        raise SystemExit(0 if intact.status == "PASS" else 1)
     elif args.cmd == "signoff-export":
         from . import signoff_export
         from . import escalation_notify as _escalation

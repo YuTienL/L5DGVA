@@ -7,7 +7,7 @@ mode than the agent making a wrong judgment call, so it needs its own cheap,
 fast, always-runnable regression net independent of any GitHub Actions
 runner.
 
-Four checks, run in this order (cheapest/most-diagnostic first, so a broken
+Five checks, run in this order (cheapest/most-diagnostic first, so a broken
 import is reported before wasting time on a full pytest run that would fail
 for the same root cause anyway):
 
@@ -65,9 +65,18 @@ for the same root cause anyway):
      iff self-audit reports a real FAIL (NO_SOURCE_DATA is not a failure --
      see self_audit.py's own Evidence Truth Rule discussion for why).
 
-  4. pytest -- the real regression suite, `python -m pytest
+  4. constitution -- M8 Cohort 5 (GAP-M8-007): dv_harness/constitution_
+     gate.py's check_constitution_intact() (textual anti-drift, real FAIL
+     on silent weakening/removal -- fails this check) plus evaluate_
+     final_compliance() (the 13-sub-criterion composite, recorded for
+     visibility but never fails this check on its own -- Migration-Wave
+     Scoping forbids expecting PASS from it before M8's own final wave).
+     Previously reachable only on demand; this is its first automatic
+     trigger.
+
+  5. pytest -- the real regression suite, `python -m pytest
      dv_harness_tests/ -q` (testpaths already scoped by pyproject.toml).
-     Run last since it is by far the most expensive of the four (the suite
+     Run last since it is by far the most expensive of the five (the suite
      includes real subprocess-driven integration tests -- e.g.
      test_cli_adapter_command_resolution.py's real `claude` CLI round trip,
      test_cli_pueue.py's real `pueued` daemon interaction -- not just pure
@@ -147,7 +156,7 @@ DEFAULT_MAX_SUBCOMMAND_DEPTH = 4  # real parser today nests at most 2 deep
                                    # kept generous rather than hard-coded to
                                    # today's exact depth.
 
-CHECK_NAMES = ["import-sanity", "cli-help-sanity", "self-audit", "pytest"]
+CHECK_NAMES = ["import-sanity", "cli-help-sanity", "self-audit", "constitution", "pytest"]
 
 # Who/what caused this run. Recorded verbatim in the run record so "the
 # self-test passes" and "something other than a human running it by hand has
@@ -362,7 +371,47 @@ def run_self_audit_check() -> CheckResult:
                         {"summary": summary, "failing_gates": failing_gates})
 
 
-# --- 4. pytest -----------------------------------------------------------------
+# --- 4. constitution ------------------------------------------------------------
+# M8 Cohort 5 (GAP-M8-007): the automatic-invocation edge check_constitution_
+# intact() never had -- previously reachable only on demand (a manual `python -c`
+# or a test run), never wired into any trigger that fires without a human
+# remembering to ask. This check's own `ok` is driven SOLELY by check_
+# constitution_intact()'s real textual-intactness verdict (a real FAIL there
+# means the constitution was silently weakened/removed -- exactly what this
+# fast pre-push gate exists to catch). evaluate_final_compliance()'s own
+# composite is run and recorded for visibility, but never fails this check on
+# its own: Migration-Wave Scoping explicitly forbids expecting PASS from it at
+# this wave, so a real, honest PARTIAL/FAIL from that evaluator must not block
+# every future push until M8's own final wave closes it.
+
+def run_constitution_check() -> CheckResult:
+    t0 = time.monotonic()
+    try:
+        from dv_harness import constitution_gate as cg
+    except BaseException as exc:  # noqa: BLE001
+        return CheckResult("constitution", False, time.monotonic() - t0,
+                            {"error": f"could not import dv_harness.constitution_gate: {type(exc).__name__}: {exc}"})
+    try:
+        intact = cg.check_constitution_intact(REPO_ROOT)
+    except BaseException as exc:  # noqa: BLE001
+        return CheckResult("constitution", False, time.monotonic() - t0,
+                            {"error": f"check_constitution_intact() raised: {type(exc).__name__}: {exc}"})
+    try:
+        final = cg.evaluate_final_compliance(REPO_ROOT)
+        final_detail = {
+            "overall_status": final.overall_status,
+            "sub_criteria": {s.name: s.status for s in final.sub_criteria},
+        }
+    except BaseException as exc:  # noqa: BLE001 -- observability only, never fails this check
+        final_detail = {"error": f"evaluate_final_compliance() raised: {type(exc).__name__}: {exc}"}
+    ok = intact.status == "PASS"
+    return CheckResult("constitution", ok, time.monotonic() - t0, {
+        "intact_status": intact.status, "intact_reasons": intact.reasons,
+        "final_compliance": final_detail,
+    })
+
+
+# --- 5. pytest -----------------------------------------------------------------
 
 def run_pytest_suite(timeout: int, extra_args: Optional[List[str]] = None) -> CheckResult:
     t0 = time.monotonic()
@@ -440,6 +489,7 @@ CHECK_FUNCS = {
     "import-sanity": lambda args: run_import_sanity(),
     "cli-help-sanity": lambda args: run_cli_help_sanity(args.cli_help_timeout),
     "self-audit": lambda args: run_self_audit_check(),
+    "constitution": lambda args: run_constitution_check(),
     "pytest": lambda args: run_pytest_suite(args.pytest_timeout, args.pytest_args),
 }
 
@@ -447,13 +497,14 @@ CHECK_FUNCS = {
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="self_test.py",
-        description="Harness self-test: import-sanity + CLI --help sanity + self-audit + pytest, "
-                     "the four cheap/real checks that catch the harness's OWN infrastructure breaking.")
+        description="Harness self-test: import-sanity + CLI --help sanity + self-audit + constitution + "
+                     "pytest, the five cheap/real checks that catch the harness's OWN infrastructure breaking.")
     ap.add_argument("--only", action="append", choices=CHECK_NAMES, default=None,
-                     help="Run only this check; repeatable. Omit to run all four in order.")
+                     help="Run only this check; repeatable. Omit to run all five in order.")
     ap.add_argument("--skip-pytest", action="store_true",
-                     help="Shorthand for running only the three fast checks (import-sanity, "
-                          "cli-help-sanity, self-audit) -- seconds, not minutes; useful while iterating.")
+                     help="Shorthand for running only the four fast checks (import-sanity, "
+                          "cli-help-sanity, self-audit, constitution) -- seconds, not minutes; useful "
+                          "while iterating.")
     ap.add_argument("--pytest-timeout", type=int, default=DEFAULT_PYTEST_TIMEOUT,
                      help=f"Seconds before the pytest step is treated as FAIL (default {DEFAULT_PYTEST_TIMEOUT}). "
                           "The suite includes real subprocess-driven integration tests, so this is "
