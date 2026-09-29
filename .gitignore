@@ -66,6 +66,11 @@ __pycache__/
 .dv-harness/model_handoffs/result_watcher.log
 .dv-harness/model_handoffs/result_watcher.stop
 .dv-harness/model_handoffs/*/*.lock
+# CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close: the watcher's own exclusive
+# role lock and monotonic restart-generation counter -- ephemeral runtime
+# state, same class as result_watcher.json above, never version-controlled.
+.dv-harness/model_handoffs/result_watcher_role.lock
+.dv-harness/model_handoffs/result_watcher_generation.json
 
 # Stage-boundary progress reports (2026-09-04,
 # dv_harness/stage_progress_display.py -- save_stage_report()). Two markdown

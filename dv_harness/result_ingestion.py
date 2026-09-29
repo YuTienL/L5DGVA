@@ -31,6 +31,7 @@ Persistence (all beside the task's own state.json, additive):
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -43,8 +44,9 @@ from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple
 
+from . import controlled_process_executor as _cpe
 from . import execution_contract as _ec
 from . import model_handoff_workflow as _wf
 
@@ -61,6 +63,10 @@ EVENTS = (
     # emitted by resume_after_import() -- see dispatch_next_action()'s own
     # docstring for why this is never a second orchestration engine.
     "ACTION_DISPATCHED", "ACTION_DISPATCH_FAILED",
+    # CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close: a newly-started watcher's
+    # own startup-recovery pass (see startup_recovery()) failing for one
+    # task must never crash the watcher itself.
+    "STARTUP_RECOVERY_FAILED",
 )
 
 #: Workflow states in which an expected result may still (re)arrive: waiting
@@ -854,6 +860,213 @@ def _stop_flag(root: Path) -> Path:
     return Path(root) / _wf._HANDOFF_DIR / "result_watcher.stop"
 
 
+def _watcher_role_lock(root: Path) -> Path:
+    return Path(root) / _wf._HANDOFF_DIR / "result_watcher_role.lock"
+
+
+def _generation_file(root: Path) -> Path:
+    return Path(root) / _wf._HANDOFF_DIR / "result_watcher_generation.json"
+
+
+def _next_runtime_generation(root: Path) -> int:
+    """Monotonically increasing across restarts -- lets a caller tell
+    'the same long-running process' apart from 'a new watcher instance
+    started after a restart', even when the OS-level PID happens to be
+    reused. Safe unguarded read-increment-write: only ever called from
+    inside `watch()`'s own startup, itself gated on the exclusive
+    `_watcher_role_lock()` acquired immediately before it."""
+    rec = _read_json(_generation_file(root)) or {"generation": 0}
+    gen = int(rec.get("generation", 0)) + 1
+    _atomic_write_json(_generation_file(root), {"generation": gen})
+    return gen
+
+
+#: How many import hops from `result_ingestion.py` itself still count as
+#: "control-plane". A REAL, MEASURED fact drove this bound, not a guess: the
+#: FULL unbounded transitive closure of this module's imports reaches ~195
+#: of this package's ~260 files (verified: `len(_import_closure(max_depth=
+#: None)) == 195`), because a small number of hub modules a couple of hops
+#: out (a broad analysis/reporting utility) themselves import huge swaths of
+#: unrelated capability -- true as a STATIC fact, but useless as a
+#: "control-plane-affecting" signal, since it would make RESTART_REQUIRED
+#: fire on almost any commit anywhere in dv_harness/. Depth 2 is the
+#: smallest bound that still contains, by direct measurement, every one of
+#: the 5 files the dispatch itself names as the real runtime dependency set
+#: (`execution_contract.py`, `model_handoff_workflow.py`,
+#: `agent_execution_backend.py`, `controlled_process_executor.py` are each
+#: <=2 hops from this entry point) -- so the bound is derived from where
+#: those real, named collaborators actually sit in the real graph, not
+#: picked to make a number look good.
+_CONTROL_PLANE_MAX_DEPTH = 2
+
+
+def _module_import_names(path: Path) -> List[str]:
+    """The real dv_harness-internal submodule names a single file imports,
+    parsed from its actual AST -- both `from . import x[, y]` (module=None;
+    the dominant style in this package) and `from .x import y` (module=`x`;
+    `y` is a name inside it, not itself a submodule) relative forms, plus
+    absolute `import dv_harness.x`. Walks the WHOLE tree (`ast.walk`), so a
+    local import inside a function body (e.g. `dispatch_next_action()`'s
+    own `from .model_handoff import HandoffBuildError`) is found too."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return []
+    names: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level and node.level >= 1:
+            if node.module:
+                names.append(node.module)
+            else:
+                names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module and node.module.startswith("dv_harness."):
+            names.append(node.module[len("dv_harness."):])
+        elif isinstance(node, ast.Import):
+            names.extend(alias.name[len("dv_harness."):] for alias in node.names
+                        if alias.name.startswith("dv_harness."))
+    return names
+
+
+def control_plane_dependency_set(max_depth: Optional[int] = _CONTROL_PLANE_MAX_DEPTH) -> FrozenSet[str]:
+    """The real import neighborhood of THIS module (the watcher's own
+    control-plane entry point), as posix paths relative to `dv_harness/`
+    (e.g. `execution_contract.py`) -- computed via AST parsing of real
+    import statements, never a hardcoded guess at which sibling modules
+    matter (CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close, dispatch section 4:
+    'derive the final set from imports/call graph rather than blindly
+    hardcoding'). Bounded to `max_depth` hops (see `_CONTROL_PLANE_MAX_
+    DEPTH`'s own docstring for why 2 is a measured, not guessed, bound);
+    `max_depth=None` computes the FULL unbounded transitive closure instead
+    (used only to derive/verify that bound itself, never for a real
+    restart decision -- it is not a 'bounded set' as the dispatch
+    requires). A module this repo doesn't ship (stdlib/third-party) is
+    silently skipped, never guessed at."""
+    pkg_dir = Path(__file__).resolve().parent
+    entry = Path(__file__).resolve()
+    seen: Set[str] = set()
+    frontier = [entry]
+    depth = 0
+    while frontier and (max_depth is None or depth <= max_depth):
+        next_frontier: List[Path] = []
+        for path in frontier:
+            try:
+                rel = path.relative_to(pkg_dir).as_posix()
+            except ValueError:
+                continue  # outside this package -- never followed
+            if rel in seen or not path.is_file():
+                continue
+            seen.add(rel)
+            for name in _module_import_names(path):
+                next_frontier.append(pkg_dir / (name.replace(".", "/") + ".py"))
+        frontier = next_frontier
+        depth += 1
+    seen.discard(entry.relative_to(pkg_dir).as_posix())  # the entry point is not its own dependency
+    return frozenset(seen)
+
+
+def _changed_control_plane_files(root: Path, old_head: str, new_head: str) -> Set[str]:
+    """`git diff --name-only old_head..new_head` intersected with
+    `control_plane_dependency_set()` -- a Git failure (unknown ref, no git
+    on PATH) returns an EMPTY set (RESTART_REQUIRED stays NO) rather than
+    guessing YES; an honest 'could not determine' is never escalated into
+    an unrequested restart."""
+    try:
+        proc = subprocess.run(["git", "-C", str(root), "diff", "--name-only", old_head, new_head],
+                              capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if proc.returncode != 0:
+        return set()
+    changed = {line.strip().replace("\\", "/") for line in proc.stdout.splitlines() if line.strip()}
+    deps = {f"dv_harness/{d}" for d in control_plane_dependency_set()}
+    return changed & deps
+
+
+def runtime_restart_status(root: Path) -> Dict[str, Any]:
+    """The claim-discipline report the dispatch requires reported
+    separately, never collapsed into a single pass/fail: SOURCE_HEAD (this
+    checkout's current HEAD), WATCHER_RUNTIME_HEAD (the HEAD the ACTIVE
+    watcher process actually started from), WATCHER_RUNTIME_STATUS,
+    WATCHER_RESTART_REQUIRED, and, when YES, WATCHER_RESTART_REASON naming
+    the real changed control-plane file(s). A watcher that never recorded
+    `source_head_at_start` (started before this capability existed) is
+    honestly `UNKNOWN`, never assumed current."""
+    identity = _cpe.verify_canonical_repository_identity(root)
+    rec = _read_json(_watcher_file(root)) or {}
+    source_head = rec.get("source_head_at_start")
+    current_head = identity.head
+    result: Dict[str, Any] = {
+        "SOURCE_HEAD": current_head,
+        "WATCHER_RUNTIME_HEAD": source_head,
+        "WATCHER_RUNTIME_STATUS": watcher_status(root),
+        "WATCHER_RUNTIME_GENERATION": rec.get("runtime_generation"),
+        "WATCHER_RESTART_REQUIRED": "NO",
+        "WATCHER_RESTART_REASON": None,
+    }
+    if not source_head:
+        result["WATCHER_RESTART_REQUIRED"] = "UNKNOWN"
+        result["WATCHER_RESTART_REASON"] = "ACTIVE watcher predates runtime-identity capture (no source_head_at_start recorded)"
+        return result
+    if not current_head or source_head == current_head:
+        return result
+    changed = _changed_control_plane_files(root, source_head, current_head)
+    if changed:
+        result["WATCHER_RESTART_REQUIRED"] = "YES"
+        result["WATCHER_RESTART_REASON"] = (
+            f"control-plane-affecting file(s) changed since watcher start: {sorted(changed)}")
+    return result
+
+
+def startup_recovery(root: Path) -> List[Dict[str, Any]]:
+    """A newly-started (current-code) watcher's own recovery pass, run
+    once before it enters its normal poll loop: resumes every registered
+    task whose persisted Next Action is still `auto_actionable`/
+    `next_action_owner=L5DGVA` AND whose real Can-I-Stop state is still
+    `AUTO_RUNNING` (or has no stop record at all yet) -- exactly the shape
+    a STALE prior runtime may have resolved but, running pre-dispatch-fix
+    code, never actually executed (the real REVIEW-002 CONTROL_PLANE_
+    RUNTIME_HEAD_DRIFT finding). Never requires a changed RESULT hash or a
+    fresh import to recover it: `resume_after_import()` re-dispatches
+    directly from persisted state, and is itself idempotent (a task
+    already past that action is a safe no-op, per `test_auto_resume_
+    dispatch.py`'s own duplicate-dispatch coverage) -- so calling it for
+    every ELIGIBLE registered task on every watcher start is safe, never a
+    double-consume/double-dispatch risk.
+
+    The `AUTO_RUNNING` guard is REQUIRED, not optional: live-reproduced
+    real damage without it -- M7-V1-CODEX-REVIEW-003/004 each had a
+    genuinely stale `next_action.json` (auto_actionable=true, left over
+    from before any dispatcher existed) but had ALREADY been separately,
+    correctly marked `STATE=COMPLETE`/`STOP_REASON=TASK_COMPLETE` with a
+    real, human-meaningful `STOP_EVIDENCE` narrative via a different
+    mechanism. An unguarded recovery pass called `resume_after_import()`
+    on them anyway, which recomputed and overwrote that real completion
+    record with a generic `STATE=AUTO_RUNNING`/empty-evidence one --
+    silently destroying real historical evidence, exactly what the
+    dispatch's own 'restart preserves execution-contract state' invariant
+    forbids. A task already in any OTHER real stop state (`TASK_COMPLETE`,
+    `HUMAN_AUTHORITY_REQUIRED`, `HUMAN_TRANSPORT_REQUIRED`, ...) has
+    already been closed by a real evaluation; a stale `next_action.json`
+    left over from before that closure existed is a separate, lower-
+    priority bookkeeping inconsistency, never something this recovery
+    pass may unilaterally act on."""
+    results: List[Dict[str, Any]] = []
+    for t in _registered_task_ids(root):
+        rec = _ec.read_next_action(root, t)
+        if not (rec and rec.get("auto_actionable") and rec.get("next_action_owner") == "L5DGVA"):
+            continue
+        stop = _ec.read_persisted_stop(root, t)
+        if stop is not None and stop.get("STATE") != "AUTO_RUNNING":
+            continue  # already closed by a real evaluation -- never overwritten
+        try:
+            decision = resume_after_import(root, t)
+            results.append({"task_id": t, "recovered": True, "decision": decision})
+        except Exception as exc:  # a recovery failure must never crash the watcher's own startup
+            _emit(root, t, "STARTUP_RECOVERY_FAILED", error=type(exc).__name__)
+            results.append({"task_id": t, "recovered": False, "error": type(exc).__name__})
+    return results
+
+
 def watcher_status(root: Path, policy: Optional[IngestionPolicy] = None, now: Optional[float] = None) -> str:
     policy = policy or load_policy(root)
     rec = _read_json(_watcher_file(root))
@@ -867,42 +1080,99 @@ def watcher_status(root: Path, policy: Optional[IngestionPolicy] = None, now: Op
 
 def watch(root: Path, *, policy: Optional[IngestionPolicy] = None, max_iterations: Optional[int] = None,
           sleep: Callable[[float], None] = time.sleep) -> int:
-    """The watcher loop: heartbeat + startup scan first, then poll. Exits on
-    the stop flag, after `max_iterations`, or when nothing has been pending
-    for `idle_exit_seconds` (a later export/startup re-ensures it)."""
+    """The watcher loop: role-lock, runtime-identity capture, startup
+    recovery, heartbeat + startup scan, then poll. Exits on the stop flag,
+    after `max_iterations`, or when nothing has been pending for
+    `idle_exit_seconds` (a later export/startup re-ensures it).
+
+    CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close: a long-running instance of
+    this loop holds an in-memory copy of `result_ingestion.py` (and
+    everything it imports) loaded at start -- editing those files on disk
+    afterward has zero effect on it, confirmed live (REVIEW-002: a watcher
+    started 2026-09-24 kept running the pre-dispatch-fix `resume_after_
+    import()` five days after commit 6083ae6 landed the fix, correctly
+    ingesting/resolving but never dispatching). Two things now close that
+    gap: (1) `_watcher_role_lock()`, an exclusive OS-level lock (the same
+    `model_handoff_workflow._acquire_lock`/`_release_lock` primitive
+    `_task_lock()` already reuses) held for this process's entire
+    lifetime, so two NEW-code watchers can never both claim the role
+    (a pre-existing OLD-code watcher predates this lock and is handled by
+    `restart_watcher()`'s cooperative stop-then-start sequence instead,
+    never a blind kill); (2) real runtime identity (source HEAD, repo root,
+    python executable, a monotonic generation counter) persisted at start,
+    so `runtime_restart_status()` can honestly compare what this ACTIVE
+    process actually started from against the current checkout, rather
+    than assuming a running heartbeat means current code."""
     root = Path(root)
     policy = policy or load_policy(root)
+    lock_token = _wf._acquire_lock(_watcher_role_lock(root), policy.lock_stale_seconds)
+    if lock_token is None:
+        print("[result_watcher] another watcher already owns the Canonical watcher role -- refusing to "
+              "start a second one", file=sys.stderr, flush=True)
+        return 1
     try:
-        _stop_flag(root).unlink()
-    except OSError:
-        pass
-    started = time.time()
-    idle_since = None
-    for t in list_pending(root):
-        _emit(root, t, "WATCH_STARTED", pid=os.getpid())
-    i = 0
-    while max_iterations is None or i < max_iterations:
-        i += 1
-        _atomic_write_json(_watcher_file(root), {
-            "pid": os.getpid(), "started_at_epoch": started, "last_heartbeat_epoch": time.time(),
-            "poll_interval_seconds": policy.poll_interval_seconds, "iterations": i, "status": "ACTIVE"})
-        if _stop_flag(root).exists():
-            break
         try:
-            poll_once(root, policy=policy)
-        except Exception as exc:  # the loop must survive anything a single poll hits
-            print(f"[result_watcher] poll error: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-        if list_pending(root):
-            idle_since = None
-        else:
-            idle_since = idle_since or time.time()
-            if time.time() - idle_since >= policy.idle_exit_seconds:
+            _stop_flag(root).unlink()
+        except OSError:
+            pass
+        try:
+            # Fails closed (CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close,
+            # anti-drift requirement "repo identity mismatch fails closed"):
+            # a watcher must refuse to run at all against a directory that
+            # is not genuinely its own real repo worktree (e.g. a nested
+            # throwaway probe dir with no `.dv-harness` of its own) --
+            # never silently record a null/mismatched identity and proceed
+            # as if nothing were wrong.
+            identity = _cpe.require_canonical_repository_identity(root)
+        except _cpe.RepositoryIdentityError as exc:
+            print(f"[result_watcher] refusing to start: repository identity check failed ({exc.reason})",
+                  file=sys.stderr, flush=True)
+            return 2
+        base_record = {
+            "pid": os.getpid(),
+            "started_at_epoch": time.time(),
+            "python_executable": sys.executable,
+            "source_head_at_start": identity.head,
+            "repo_root_identity": identity.resolved_root,
+            "repo_root_matched": identity.matched,
+            "runtime_generation": _next_runtime_generation(root),
+        }
+        _atomic_write_json(_watcher_file(root), {**base_record, "last_heartbeat_epoch": time.time(),
+                                                  "poll_interval_seconds": policy.poll_interval_seconds,
+                                                  "iterations": 0, "status": "ACTIVE"})
+        # Startup recovery -- BEFORE the normal poll loop: resumes any
+        # persisted auto-actionable action a prior (possibly stale) runtime
+        # resolved but could not execute. Never requires a changed hash or
+        # a fresh import.
+        startup_recovery(root)
+        idle_since = None
+        for t in list_pending(root):
+            _emit(root, t, "WATCH_STARTED", pid=os.getpid())
+        i = 0
+        while max_iterations is None or i < max_iterations:
+            i += 1
+            _atomic_write_json(_watcher_file(root), {**base_record, "last_heartbeat_epoch": time.time(),
+                                                      "poll_interval_seconds": policy.poll_interval_seconds,
+                                                      "iterations": i, "status": "ACTIVE"})
+            if _stop_flag(root).exists():
                 break
-        sleep(policy.poll_interval_seconds)
-    _atomic_write_json(_watcher_file(root), {
-        "pid": os.getpid(), "started_at_epoch": started, "last_heartbeat_epoch": time.time(),
-        "poll_interval_seconds": policy.poll_interval_seconds, "iterations": i, "status": "STOPPED"})
-    return 0
+            try:
+                poll_once(root, policy=policy)
+            except Exception as exc:  # the loop must survive anything a single poll hits
+                print(f"[result_watcher] poll error: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            if list_pending(root):
+                idle_since = None
+            else:
+                idle_since = idle_since or time.time()
+                if time.time() - idle_since >= policy.idle_exit_seconds:
+                    break
+            sleep(policy.poll_interval_seconds)
+        _atomic_write_json(_watcher_file(root), {**base_record, "last_heartbeat_epoch": time.time(),
+                                                  "poll_interval_seconds": policy.poll_interval_seconds,
+                                                  "iterations": i, "status": "STOPPED"})
+        return 0
+    finally:
+        _wf._release_lock(_watcher_role_lock(root), lock_token)
 
 
 def ensure_watcher(root: Path, *, policy: Optional[IngestionPolicy] = None, wait_seconds: float = 10.0) -> str:
@@ -937,6 +1207,55 @@ def stop_watcher(root: Path) -> None:
     _stop_flag(root).write_text("stop", encoding="utf-8")
 
 
+def restart_watcher(root: Path, *, wait_seconds: float = 30.0) -> Dict[str, Any]:
+    """Controlled watcher lifecycle (CONTROL_PLANE_RUNTIME_HEAD_DRIFT
+    gap-close, dispatch section 5): ACTIVE -> DRAINING (cooperative stop
+    flag) -> confirm the old process actually stopped -> start a new one
+    from the CURRENT on-disk source -> verify its own PID/repo/head
+    identity. Never an unsafe blind kill: if the old watcher does not
+    honor the stop flag within `wait_seconds`, this refuses to start a
+    second one (two mutation-capable watchers must never concurrently own
+    the role) and reports the failure rather than guessing it is safe.
+
+    Touches ONLY `result_watcher.json` / the role lock / the generation
+    counter -- every other persisted artifact (expected-result
+    registrations, ingestion history, quarantine state, the registry, the
+    question queue, next actions, execution-contract state) is untouched
+    by the restart itself; `watch()`'s own startup recovery is what may
+    then legitimately advance next-action/execution-contract state for a
+    task that was genuinely due for it."""
+    root = Path(root)
+    policy = load_policy(root)
+    before = _read_json(_watcher_file(root)) or {}
+    old_pid = before.get("pid")
+    if watcher_status(root, policy) != "ACTIVE":
+        new_status = ensure_watcher(root, policy=policy, wait_seconds=wait_seconds)
+        return {"RESTART_STATUS": "STARTED_FRESH_NO_PRIOR_ACTIVE_WATCHER", "OLD_PID": old_pid,
+                "NEW_STATUS": new_status, "NEW_RECORD": _read_json(_watcher_file(root))}
+    stop_watcher(root)  # DRAINING
+    deadline = time.time() + wait_seconds
+    stopped = False
+    while time.time() < deadline:
+        rec = _read_json(_watcher_file(root)) or {}
+        if rec.get("status") == "STOPPED" or rec.get("pid") != old_pid:
+            stopped = True
+            break
+        time.sleep(0.25)
+    if not stopped:
+        return {"RESTART_STATUS": "RESTART_FAILED_OLD_WATCHER_DID_NOT_STOP", "OLD_PID": old_pid}
+    new_status = ensure_watcher(root, policy=policy, wait_seconds=wait_seconds)
+    after = _read_json(_watcher_file(root)) or {}
+    if new_status != "ACTIVE" or after.get("pid") == old_pid:
+        return {"RESTART_STATUS": "RESTART_FAILED_NEW_WATCHER_DID_NOT_START", "OLD_PID": old_pid,
+                "NEW_RECORD": after}
+    return {
+        "RESTART_STATUS": "RESTARTED", "OLD_PID": old_pid, "NEW_PID": after.get("pid"),
+        "NEW_RUNTIME_GENERATION": after.get("runtime_generation"),
+        "NEW_SOURCE_HEAD_AT_START": after.get("source_head_at_start"),
+        "NEW_REPO_ROOT_MATCHED": after.get("repo_root_matched"),
+    }
+
+
 # --- observability / reports -----------------------------------------------------
 
 def status_report(root: Path) -> Dict[str, Any]:
@@ -960,11 +1279,16 @@ def status_report(root: Path) -> Dict[str, Any]:
             "NEXT_ACTION": na.get("next_action"),
             "HUMAN_ACTION_REQUIRED": stop.get("HUMAN_ACTION_REQUIRED", "NO"),
         }
-    return {
+    report = {
         "RESULT_WATCHER_STATUS": watcher_status(root, policy),
         "PENDING_EXTERNAL_RESULTS": list_pending(root),
         "TASKS": tasks,
     }
+    # CONTROL_PLANE_RUNTIME_HEAD_DRIFT gap-close: reported as separate,
+    # named fields (dispatch section 9's claim-discipline requirement) --
+    # never collapsed into a single "watcher is fine" boolean.
+    report.update(runtime_restart_status(root))
+    return report
 
 
 def transport_stop_report(root: Path, task_id: str) -> Dict[str, str]:
@@ -983,7 +1307,8 @@ def transport_stop_report(root: Path, task_id: str) -> Dict[str, str]:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="result_ingestion")
     sub = ap.add_subparsers(dest="verb", required=True)
-    for name in ("register", "scan", "poll", "watch", "status", "ensure-watcher", "stop-watcher", "replay"):
+    for name in ("register", "scan", "poll", "watch", "status", "ensure-watcher", "stop-watcher",
+                 "restart-watcher", "runtime-status", "replay"):
         p = sub.add_parser(name)
         p.add_argument("--root", default=".")
         if name in ("register", "replay"):
@@ -1007,6 +1332,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(ensure_watcher(root))
     elif a.verb == "stop-watcher":
         stop_watcher(root)
+    elif a.verb == "restart-watcher":
+        print(json.dumps(restart_watcher(root), indent=2))
+    elif a.verb == "runtime-status":
+        print(json.dumps(runtime_restart_status(root), indent=2))
     elif a.verb == "replay":
         schedule_replay(root, a.task_id, a.sha256, a.reason)
     return 0

@@ -2,15 +2,16 @@
   "auto_import_status": "QUARANTINED",
   "auto_resume_status": "DONE",
   "import_attempts": {
-    "4d6af04db9f2a0dcd69d846408200cf3d2e4c2334b9950be9b730a968d8b3b13": 1
+    "4d6af04db9f2a0dcd69d846408200cf3d2e4c2334b9950be9b730a968d8b3b13": 1,
+    "5da36790306a47d89538f7413c1ca746eb647a8c12288c9ab93ede7f6758270c": 1
   },
-  "last_detected_result_sha256": "4d6af04db9f2a0dcd69d846408200cf3d2e4c2334b9950be9b730a968d8b3b13",
+  "last_detected_result_sha256": "5da36790306a47d89538f7413c1ca746eb647a8c12288c9ab93ede7f6758270c",
   "observation": {
-    "first_seen_at": 1790647892.9172199,
-    "mtime_ns": 1790647168679598500,
-    "observations": 570,
-    "sha256": "4d6af04db9f2a0dcd69d846408200cf3d2e4c2334b9950be9b730a968d8b3b13",
-    "size": 14627,
+    "first_seen_at": 1790651738.7744446,
+    "mtime_ns": 1790651713377653900,
+    "observations": 837,
+    "sha256": "5da36790306a47d89538f7413c1ca746eb647a8c12288c9ab93ede7f6758270c",
+    "size": 7174,
     "stability_logged": true
   },
   "results": {
@@ -24,10 +25,22 @@
       "result_path": ".dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002\\RESULT_V1.md",
       "retry_eligibility": "ON_CHANGED_HASH_OR_SCHEDULED_REPLAY_OR_AUTHORIZED_RECOVERY",
       "validation_findings": []
+    },
+    "5da36790306a47d89538f7413c1ca746eb647a8c12288c9ab93ede7f6758270c": {
+      "consumed_at": null,
+      "import_attempt_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002:5da36790306a:ed2231f3",
+      "import_state": "QUARANTINED",
+      "imported_at": "2026-09-29T03:15:43.833922+00:00",
+      "quarantined_at": "2026-09-29T03:15:43.847930+00:00",
+      "rejection_reason": "UNEXPECTED_PREAMBLE",
+      "result_path": ".dv-harness\\model_handoffs\\M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002\\RESULT_V1.md",
+      "retry_eligibility": "ON_CHANGED_HASH_OR_SCHEDULED_REPLAY_OR_AUTHORIZED_RECOVERY",
+      "validation_findings": []
     }
   },
   "suppression_logged": [
-    "4d6af04db9f2a0dcd69d846408200cf3d2e4c2334b9950be9b730a968d8b3b13:QUARANTINED_HASH_NOT_RETRIED"
+    "4d6af04db9f2a0dcd69d846408200cf3d2e4c2334b9950be9b730a968d8b3b13:QUARANTINED_HASH_NOT_RETRIED",
+    "5da36790306a47d89538f7413c1ca746eb647a8c12288c9ab93ede7f6758270c:QUARANTINED_HASH_NOT_RETRIED"
   ],
   "task_id": "M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002"
 }

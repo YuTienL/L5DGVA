@@ -8,3 +8,6 @@
 {"event": "RESULT_CONSUMED", "question_id": null, "result_sha256": "59099ec77a93820819cd2ef52ff4f4784f2a2f63768d5265e9ce61b5b5df9127", "task_id": "M7-V1-CODEX-REVIEW-004", "ts": "2026-09-27T14:49:54.771569+00:00"}
 {"event": "AUTO_RESUME_STARTED", "task_id": "M7-V1-CODEX-REVIEW-004", "ts": "2026-09-27T14:49:54.778467+00:00"}
 {"auto_actionable": true, "event": "NEXT_ACTION_RESOLVED", "next_action": "AUTO_REMEDIATE_CONFIRMED_FINDINGS", "stop_reason": null, "task_id": "M7-V1-CODEX-REVIEW-004", "ts": "2026-09-27T14:49:54.781172+00:00"}
+{"event": "AUTO_RESUME_STARTED", "task_id": "M7-V1-CODEX-REVIEW-004", "ts": "2026-09-29T03:49:21.226901+00:00"}
+{"auto_actionable": true, "event": "NEXT_ACTION_RESOLVED", "next_action": "AUTO_REMEDIATE_CONFIRMED_FINDINGS", "stop_reason": null, "task_id": "M7-V1-CODEX-REVIEW-004", "ts": "2026-09-29T03:49:21.228987+00:00"}
+{"dispatch_status": "BACKEND_RESOLVED", "event": "ACTION_DISPATCHED", "next_action": "AUTO_REMEDIATE_CONFIRMED_FINDINGS", "task_id": "M7-V1-CODEX-REVIEW-004", "ts": "2026-09-29T03:49:21.231155+00:00"}

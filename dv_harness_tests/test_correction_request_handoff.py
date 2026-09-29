@@ -155,6 +155,55 @@ def test_a_corrected_resubmission_to_the_same_path_is_consumed_normally(repo):
     assert wf.current_state(repo, "T-1") == wf.STATE_RESULT_CONSUMED
 
 
+def test_repeated_rejections_do_not_nest_correction_wrappers(repo):
+    """Real, live-discovered defect (M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002:
+    corrected for MALFORMED_LIST_ITEM, resubmitted, rejected AGAIN for
+    UNEXPECTED_PREAMBLE): a second correction round must wrap the TRUE
+    original objective exactly once, never a correction-of-a-correction,
+    and must carry exactly one correction-notice KNOWN_FACTS bullet (the
+    current reason), never one stale bullet per round."""
+    import dv_harness.result_ingestion as ri
+
+    expected = _export(repo, "T-1", objective="ORIGINAL_MARKER_TEXT_67890")
+    expected.write_text(_malformed_result_text("T-1"), encoding="utf-8")
+    wf.import_result(repo, "T-1", expected)
+    correction1 = wf.build_correction_request_handoff(repo, "T-1")
+    wf.export_handoff(repo, correction1)
+    assert wf.current_state(repo, "T-1") == wf.STATE_WAITING_FOR_HUMAN_TRANSPORT
+
+    # A SECOND, differently-malformed resubmission (a real MALFORMED_
+    # LIST_ITEM shape: a wrapped/continuation line under a list section).
+    second_malformed = (
+        "# L5DGVA_MODEL_RESULT_V1\n\n<!-- L5DGVA_VALUE_ENCODING=escaped-v1 -->\n\n"
+        "## RESULT_VERSION\n1.0\n\n## TASK_ID\nT-1\n\n## PRODUCER_MODEL\ncodex\n\n"
+        "## TASK_TYPE\nreview-route\n\n## RESULT_STATUS\nFAIL\n\n## CLAIMS\n- CLAIM: c\n\n"
+        "## FINDINGS\n- FINDING: a\nthis wrapped continuation line is ambiguous\n\n"
+        "## EVIDENCE_REFS\n- dv_harness/module_a.py:1\n\n"
+        "## COUNTER_EVIDENCE\n(none)\n\n## UNKNOWN_ITEMS\n(none)\n\n"
+        "## FILES_REFERENCED\n- dv_harness/module_a.py\n\n## VALIDATION_PERFORMED\n- v\n\n"
+        "## RECOMMENDED_ACTIONS\n(none)\n\n## HUMAN_DECISIONS_REQUIRED\n(none)\n\n"
+        "## SCOPE_EXCEPTIONS\n(none)\n\n## RETURNED_ARTIFACTS\n"
+        "- .dv-harness/model_handoffs/T-1/RESULT_V1.md\n"
+    )
+    expected.write_text(second_malformed, encoding="utf-8")
+    ri.ingest_result_file(repo, "T-1", expected, trigger="MANUAL",
+                          policy=ri.IngestionPolicy(quiet_seconds=0.0, min_observations=1))
+    # ingest_result_file() -> resume_after_import() now auto-dispatches the
+    # SECOND correction for real (the production wiring this same session
+    # added) -- state is already WAITING_FOR_HUMAN_TRANSPORT with a second,
+    # freshly auto-exported correction handoff, never a manual re-call.
+    assert wf.current_state(repo, "T-1") == wf.STATE_WAITING_FOR_HUMAN_TRANSPORT
+    correction2 = wf._load_handoff(repo, "T-1")
+    assert correction2.objective.count("ORIGINAL_MARKER_TEXT_67890") == 1
+    assert correction2.objective.count("CORRECTION REQUIRED for your own previous RESULT_V1.md") == 1
+    assert "MALFORMED_LIST_ITEM" in correction2.objective
+    assert "MALFORMED_ESCAPE" not in correction2.objective  # the FIRST round's stale reason is gone, not nested in
+    notice_bullets = [f for f in correction2.known_facts
+                      if f.startswith("This is an AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF re-issue of")]
+    assert len(notice_bullets) == 1
+    assert "MALFORMED_LIST_ITEM" in notice_bullets[0]
+
+
 def test_refuses_to_build_a_correction_request_for_a_task_that_is_not_actually_rejected(repo):
     expected = _export(repo, "T-1")
     with pytest.raises(HandoffBuildError):

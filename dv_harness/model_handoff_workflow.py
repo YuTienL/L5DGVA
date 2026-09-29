@@ -806,6 +806,38 @@ _CORRECTION_DETAIL_FIELD_NAMES = {
     "missing": "MISSING_FIELDS",
 }
 
+#: The literal marker this function's own objective text always appends
+#: right before embedding the prior objective verbatim (see the `objective =
+#: (...)` assembly below). Real, live, repeated-rejection evidence
+#: (M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002: MALFORMED_LIST_ITEM, corrected,
+#: then UNEXPECTED_PREAMBLE on the resubmission) proved that reusing
+#: `_load_handoff()`'s CURRENT objective as "the original" nests a new
+#: "CORRECTION REQUIRED..." wrapper around the PRIOR correction's own
+#: wrapper every additional rejection round, growing without bound. This
+#: marker lets `_unwrap_to_true_original_objective()` strip every layer
+#: back down to the genuine original, regardless of how many correction
+#: rounds have already happened.
+_CORRECTION_OBJECTIVE_MARKER = "still applies in full:\n\n"
+
+#: The KNOWN_FACTS bullet this function itself always prepends (with the
+#: reason interpolated) -- matched here so a repeated correction strips
+#: every PRIOR round's own now-stale bullet (citing an earlier, already-
+#: superseded rejection reason) rather than accumulating one per round.
+_CORRECTION_KNOWN_FACT_RE = re.compile(
+    r"^This is an AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF re-issue of .* after a real .* quarantine\.$")
+
+
+def _unwrap_to_true_original_objective(objective: str) -> str:
+    """Strips every nested `_CORRECTION_OBJECTIVE_MARKER`-prefixed
+    correction wrapper, returning only the genuine original objective text
+    underneath -- a no-op (returns `objective` unchanged) when it was never
+    wrapped at all. Uses the LAST occurrence of the marker, since each
+    additional nesting round prepends one more copy in front."""
+    idx = objective.rfind(_CORRECTION_OBJECTIVE_MARKER)
+    if idx == -1:
+        return objective
+    return objective[idx + len(_CORRECTION_OBJECTIVE_MARKER):]
+
 
 def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1:
     """Re-parses the quarantined `RESULT_V1.md` directly -- the exact
@@ -872,12 +904,23 @@ def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1
             "unescaping ever applied."
         )
 
+    # De-nest a REPEATED rejection (confirmed real: REVIEW-002 was
+    # corrected for MALFORMED_LIST_ITEM, resubmitted, and rejected AGAIN
+    # for UNEXPECTED_PREAMBLE) -- `original_handoff` here is whatever was
+    # most recently exported, which after one correction round IS itself a
+    # correction request, not the true original. Unwrapping first means
+    # every correction round wraps the SAME true original exactly once,
+    # never nesting a correction-of-a-correction-of-a-correction.
+    true_original_objective = _unwrap_to_true_original_objective(original_handoff.objective)
+    prior_known_facts = tuple(f for f in original_handoff.known_facts
+                              if not _CORRECTION_KNOWN_FACT_RE.match(f))
+
     objective = (
         f"CORRECTION REQUIRED for your own previous RESULT_V1.md (TASK_ID={task_id}): it was "
         "rejected as MALFORMED before any of its content could be evaluated -- your findings were "
         "never read. " + " ".join(correction_lines) + " Resubmit a corrected RESULT_V1.md to the "
-        "SAME expected path (do not change TASK_ID). Your ORIGINAL objective, unchanged, still "
-        "applies in full:\n\n" + original_handoff.objective
+        "SAME expected path (do not change TASK_ID). Your ORIGINAL objective, unchanged, "
+        + _CORRECTION_OBJECTIVE_MARKER + true_original_objective
     )
     return _handoff_mod.build_handoff(
         root, task_id=task_id, task_type=original_handoff.task_type,
@@ -885,7 +928,7 @@ def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1
         objective=objective, scope=original_handoff.scope,
         input_evidence_refs=original_handoff.input_evidence_refs,
         known_facts=(f"This is an AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF re-issue of {task_id} "
-                    f"after a real {reason} quarantine.",) + tuple(original_handoff.known_facts),
+                    f"after a real {reason} quarantine.",) + prior_known_facts,
         independence_requirement=original_handoff.independence_requirement,
         expected_output_type=original_handoff.expected_output_type,
         expected_output_schema=original_handoff.expected_output_schema,
