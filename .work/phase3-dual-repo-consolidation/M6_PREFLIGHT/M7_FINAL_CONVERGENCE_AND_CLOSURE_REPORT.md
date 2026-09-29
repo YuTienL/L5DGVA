@@ -171,11 +171,23 @@ PRODUCTION_ACTION_DISPATCH      = WIRED, live-qualified (resume_after_import() -
 CONTROL_PLANE_RUNTIME_IDENTITY  = WIRED, live-qualified (PID 29700, generation 2, repo_root_matched=true,
                                    source_head_at_start=6083ae6...; GAP-V2-018 closed)
 UNKNOWN_REGRESSION_FAILURES     = 0
-NEXT_CANONICAL_GATE             = HUMAN_TRANSPORT_REQUIRED for the real, now content-correct
-                                   M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002 correction-request handoff
-                                   (a human still needs to transport it to ChatGPT); separately, a
-                                   project-owner risk-acceptance decision on R005-2/R006-4's HumanGate
-                                   (Q-ENV-57D420FA) whenever convenient -- does not block M7 closure
+NEXT_CANONICAL_GATE             = NONE ACTIVE. CORRECTED post-commit (real error in this report's
+                                   own first version, independently caught and fixed on re-check, not
+                                   a persisted-data defect): REVIEW-002's own RESULT_SHA256=d681587f...
+                                   was ALREADY RESULT_CONSUMED (RESULT_STATUS=FAIL) BEFORE this report
+                                   was first written -- there was no outstanding correction-request
+                                   handoff awaiting transport at all; the state had already moved on to
+                                   AUTO_REMEDIATE_CONFIRMED_FINDINGS/BACKEND_RESOLVED (POST_M7_HARDENING,
+                                   non-blocking). Independently re-verified against state.json/next_
+                                   action.json/execution_contract_state.json/ingestion_state.json/
+                                   ingestion_events.jsonl/registry.csv, all unanimous. `expected_result.
+                                   json`'s own WAIT_STATE field still reads WAITING_FOR_HUMAN_TRANSPORT
+                                   -- this is R006-3's own already-disclosed, by-design, point-in-time-
+                                   at-registration metadata field, never read/trusted by any decision
+                                   code (result_ingestion.py:251-262), not a real staleness defect.
+                                   Separately, unchanged: a project-owner risk-acceptance decision on
+                                   R005-2/R006-4's HumanGate (Q-ENV-57D420FA) remains open whenever
+                                   convenient -- does not block M7 closure and was never an active gate.
 ```
 
 Zero current-scope correctness or security blockers remain, and every
@@ -199,10 +211,25 @@ before this convergence pass began.
 
 ## Next Canonical mainline gate
 
-**`WAITING_FOR_HUMAN_TRANSPORT`** for the real
-`M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002` correction-request handoff
-(target model: chatgpt) -- a human needs to transport it. This is the
-correct, legitimate stopping point: M7 is closed for Canonical-mainline
-purposes, and the one remaining live workflow item is a standing Human
-Transport gate this program has always required a human for, not a new
-M7 remediation loop.
+**CORRECTED** (real error caught on independent re-check after this
+report's first version was committed, per an explicit reconciliation
+request; never trusted from this report's own prior prose): the claim
+above that a correction-request handoff was still awaiting human
+transport was **wrong at the time it was written**. `M7-V1-CHATGPT-
+ARCHITECTURE-REVIEW-002`'s real, authoritative persisted state
+(`state.json`, `next_action.json`, `execution_contract_state.json`,
+`ingestion_state.json`, `ingestion_events.jsonl`, `registry.csv` -- all
+independently re-read and unanimous) shows `RESULT_SHA256=d681587f...`
+was **already `RESULT_CONSUMED`** (`RESULT_STATUS=FAIL`) before this
+report was first written, with no `ACTION_DISPATCHED` after it and no new
+registered expected-result. There is **no active Canonical gate right
+now**: the task is at `AUTO_REMEDIATE_CONFIRMED_FINDINGS`/`BACKEND_
+RESOLVED`, already correctly classified `POST_M7_HARDENING` (non-
+blocking) in this same report. `expected_result.json`'s own `WAIT_STATE`
+field still reads `WAITING_FOR_HUMAN_TRANSPORT` -- this is R006-3's own
+already-disclosed, by-design, registration-time-snapshot metadata field
+(`result_ingestion.py:251-262`), never read or trusted by any real
+decision code, not a genuine staleness defect requiring any fix.
+
+M7 remains closed for Canonical-mainline purposes; there is no pending
+human-transport item and no new M7 remediation loop is warranted.

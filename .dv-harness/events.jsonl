@@ -2056,3 +2056,12 @@
 {"ts": "2026-09-29T05:16:24.964975+00:00", "event": "CLI_ACCESS", "cmd": "power-intent", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-29T05:25:40.113692+00:00", "event": "CLI_ACCESS", "cmd": "requirement-contract", "user": "peter.lin", "host": "PETER-LIN"}
 {"ts": "2026-09-29T05:30:41.335771+00:00", "event": "CLI_ACCESS", "cmd": "schema-compat", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:40:01.427330+00:00", "event": "CLI_ACCESS", "cmd": "authority", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:40:02.296858+00:00", "event": "CLI_ACCESS", "cmd": "authority", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:51:40.756087+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:51:41.753087+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:51:42.759670+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:51:43.853024+00:00", "event": "CLI_ACCESS", "cmd": "uvm-lint", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:53:57.279557+00:00", "event": "CLI_ACCESS", "cmd": "vip-api-check", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:53:58.473131+00:00", "event": "CLI_ACCESS", "cmd": "vip-api-check", "user": "peter.lin", "host": "PETER-LIN"}
+{"ts": "2026-09-29T05:53:59.442403+00:00", "event": "CLI_ACCESS", "cmd": "vip-api-check", "user": "peter.lin", "host": "PETER-LIN"}
