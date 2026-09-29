@@ -794,6 +794,19 @@ def _append_registry(root: Path, handoff: ModelHandoffV1, result: ModelResultV1,
 # (a literal, un-doubled backslash inside a Windows path, written under
 # the document's own declared `escaped-v1` marker).
 
+# Maps a known `ResultParseError`/`MdKvError` detail key to the established
+# human-readable correction-request field name. Confirmed real shapes:
+# MALFORMED_ESCAPE -> {"value", "at"}; MALFORMED_LIST_ITEM -> {"line"};
+# MISSING_REQUIRED_FIELDS -> {"missing"}. Any key not listed here still
+# renders generically (`DETAIL_<KEY>=`), never silently dropped.
+_CORRECTION_DETAIL_FIELD_NAMES = {
+    "value": "OFFENDING_VALUE",
+    "at": "POSITION_IN_VALUE",
+    "line": "OFFENDING_LINE",
+    "missing": "MISSING_FIELDS",
+}
+
+
 def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1:
     """Re-parses the quarantined `RESULT_V1.md` directly -- the exact
     failure detail (offending value, position) is not persisted in
@@ -826,18 +839,27 @@ def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1
     except (OSError, UnicodeDecodeError, ResultParseError) as exc:
         if isinstance(exc, ResultParseError):
             reason = exc.reason
-            offending_value = exc.detail.get("value")
-            at = exc.detail.get("at")
+            detail = exc.detail
         else:
             reason = "RESULT_NOT_UTF8" if isinstance(exc, UnicodeDecodeError) else "RESULT_FILE_UNREADABLE"
-            offending_value = None
-            at = None
+            detail = {}
 
+    # Provider-independent, reason-agnostic detail surfacing. The original
+    # version of this function only ever looked for a `value`/`at` pair in
+    # `exc.detail` -- the shape `MALFORMED_ESCAPE` happens to raise -- so any
+    # other real rejection reason (confirmed live: `MALFORMED_LIST_ITEM`
+    # raises `{"line": ...}`, not `{"value", "at"}`) silently produced a
+    # correction request with NO offending-content citation at all. Every
+    # key genuinely captured in `exc.detail` is now cited verbatim; known
+    # keys keep their established human-readable field names (so the
+    # existing MALFORMED_ESCAPE correction contract is unchanged), any other
+    # key is still surfaced rather than silently dropped.
     correction_lines = [f"REJECTION_REASON={reason}"]
-    if offending_value is not None:
-        correction_lines.append(f"OFFENDING_VALUE={offending_value!r}")
-    if at is not None:
-        correction_lines.append(f"POSITION_IN_VALUE={at}")
+    for key, value in detail.items():
+        if value is None:
+            continue
+        field_name = _CORRECTION_DETAIL_FIELD_NAMES.get(key, f"DETAIL_{key.upper()}")
+        correction_lines.append(f"{field_name}={value!r}")
     if reason == "MALFORMED_ESCAPE":
         correction_lines.append(
             "This document declares `<!-- L5DGVA_VALUE_ENCODING=escaped-v1 -->`, which requires "
@@ -863,7 +885,7 @@ def build_correction_request_handoff(root: Path, task_id: str) -> ModelHandoffV1
         objective=objective, scope=original_handoff.scope,
         input_evidence_refs=original_handoff.input_evidence_refs,
         known_facts=(f"This is an AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF re-issue of {task_id} "
-                    f"after a real MALFORMED_ESCAPE quarantine.",) + tuple(original_handoff.known_facts),
+                    f"after a real {reason} quarantine.",) + tuple(original_handoff.known_facts),
         independence_requirement=original_handoff.independence_requirement,
         expected_output_type=original_handoff.expected_output_type,
         expected_output_schema=original_handoff.expected_output_schema,

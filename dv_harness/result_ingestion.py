@@ -57,6 +57,10 @@ EVENTS = (
     # operational events beyond the required list
     "WATCH_TRANSIENT_ERROR", "AUTO_IMPORT_FAILED_TRANSIENT", "RESULT_UNSAFE_PATH", "REPLAY_SCHEDULED",
     "RESULT_CHANGED_AFTER_CONSUMPTION", "RESULT_CHANGED_DURING_IMPORT", "INGESTION_TERMINATED",
+    # REVIEW-002 gap-close: the real Action Dispatcher's own dispatch outcome,
+    # emitted by resume_after_import() -- see dispatch_next_action()'s own
+    # docstring for why this is never a second orchestration engine.
+    "ACTION_DISPATCHED", "ACTION_DISPATCH_FAILED",
 )
 
 #: Workflow states in which an expected result may still (re)arrive: waiting
@@ -636,20 +640,57 @@ def schedule_replay(root: Path, task_id: str, result_sha256: str, reason: str) -
 def resume_after_import(root: Path, task_id: str) -> Dict[str, Any]:
     """AUTO_RESUME: the Canonical import already persisted NEXT_ACTION;
     this records the resume, resolves it, and replaces the stale
-    WAITING_FOR_HUMAN_TRANSPORT stop with the real current decision."""
+    WAITING_FOR_HUMAN_TRANSPORT stop with the real current decision.
+
+    REVIEW-002 gap-close (the real root edge two independent live ChatGPT
+    round trips found: `dispatch_next_action()` existed but had ZERO
+    production callers -- only tests and manual scripts ever invoked it,
+    so a real, persisted, `auto_actionable=true` action never actually
+    dispatched on its own). This is now that real production caller: any
+    `auto_actionable` L5DGVA-owned action is dispatched here,
+    automatically, every time a result is auto-resumed -- never requiring
+    an interactive session to remember to call it. A state-only executor
+    (`EVALUATE_CANONICAL_TASK_COMPLETION`, `AUTO_GENERATE_CORRECTION_
+    REQUEST_HANDOFF`) genuinely executes and can transition the task's own
+    state (e.g. to `WAITING_FOR_HUMAN_TRANSPORT`) with zero human
+    involvement; a code-authorship-judgment action resolves the real
+    execution backend and reports that honestly (`BACKEND_RESOLVED`,
+    never represented as `EXECUTED`) -- the work itself still requires the
+    current-session executor, a real, disclosed boundary, not a second
+    orchestration engine built to remove it. State is re-read AFTER
+    dispatch (never the pre-dispatch snapshot) because a state-only
+    executor may have already moved the task on."""
     root = Path(root)
     st = _load_ing(root, task_id)
     _emit(root, task_id, "AUTO_RESUME_STARTED")
     rec = _ec.read_next_action(root, task_id) or {}
     _emit(root, task_id, "NEXT_ACTION_RESOLVED", next_action=rec.get("next_action"),
           auto_actionable=rec.get("auto_actionable"), stop_reason=rec.get("stop_reason"))
-    signals = _ec.WorkflowSignals(
-        human_authority_required=(rec.get("stop_reason") == "HUMAN_AUTHORITY_REQUIRED"),
-        human_transport_required=(rec.get("stop_reason") == "HUMAN_TRANSPORT_REQUIRED"),
-        auto_actionable_pending=bool(rec.get("auto_actionable")),
-        next_required_action=str(rec.get("next_action") or ""),
-        resume_action="AUTO_RESUME",
-        stop_evidence=f"external result ingested automatically; next action {rec.get('next_action')}")
+
+    if rec.get("auto_actionable") and rec.get("next_action_owner") == "L5DGVA":
+        try:
+            outcome = _ec.dispatch_next_action(root, task_id)
+            _emit(root, task_id, "ACTION_DISPATCHED", next_action=outcome.next_action,
+                  dispatch_status=outcome.dispatch_status)
+        except Exception as exc:  # a dispatch failure must never crash auto-resume itself
+            _emit(root, task_id, "ACTION_DISPATCH_FAILED", next_action=rec.get("next_action"),
+                  error=type(exc).__name__)
+
+    # Re-derive signals from the CURRENT state, not the pre-dispatch
+    # snapshot: a state-only executor's own transition (e.g. to
+    # WAITING_FOR_HUMAN_TRANSPORT) is the real, current fact now.
+    current_state = _wf.current_state(root, task_id)
+    if current_state == _wf.STATE_WAITING_FOR_HUMAN_TRANSPORT:
+        signals = _ec.signals_from_model_handoff_state(root, task_id)
+    else:
+        post_rec = _ec.read_next_action(root, task_id) or rec
+        signals = _ec.WorkflowSignals(
+            human_authority_required=(post_rec.get("stop_reason") == "HUMAN_AUTHORITY_REQUIRED"),
+            human_transport_required=(post_rec.get("stop_reason") == "HUMAN_TRANSPORT_REQUIRED"),
+            auto_actionable_pending=bool(post_rec.get("auto_actionable")),
+            next_required_action=str(post_rec.get("next_action") or ""),
+            resume_action="AUTO_RESUME",
+            stop_evidence=f"external result ingested automatically; next action {post_rec.get('next_action')}")
     decision = _ec.can_i_stop(signals)
     _ec.persist_stop(root, task_id, decision)
     st["auto_resume_status"] = "DONE"

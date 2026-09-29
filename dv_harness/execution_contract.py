@@ -426,12 +426,52 @@ def dispatch_next_action(root: Path, task_id: str) -> DispatchOutcome:
     if action == "EVALUATE_CANONICAL_TASK_COMPLETION":
         evaluation = evaluate_canonical_task_completion(root, task_id)
         persist_completion_evaluation(root, task_id, evaluation)
+        # Close THIS action's own loop automatically -- the real gap found
+        # live for M7-V1-CODEX-REVIEW-007 (this action's own output was
+        # persisted, but its next_action.json was left stale, indistinguishable
+        # from "never executed"). Never left to a manual follow-up call again.
+        record_completion_evaluation_next_action(root, task_id, evaluation)
         return DispatchOutcome(task_id, action, DISPATCH_EXECUTED, evaluation.to_dict())
 
     if action == "AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF":
         from . import model_handoff_workflow as _wf
-        correction = _wf.build_correction_request_handoff(root, task_id)
+        from .model_handoff import HandoffBuildError
+        try:
+            correction = _wf.build_correction_request_handoff(root, task_id)
+        except HandoffBuildError as exc:
+            if exc.reason == "NOT_REJECTED":
+                # Idempotency: a duplicate dispatch (e.g. a repeated watcher
+                # poll/resume) after this action already ran once -- the task
+                # has already moved on (export_handoff() transitions it to
+                # WAITING_FOR_HUMAN_TRANSPORT). Never a second correction
+                # handoff, never an unhandled exception surfacing to the caller.
+                return DispatchOutcome(task_id, action, DISPATCH_EXECUTED,
+                                      {"already_dispatched": True, "current_state": _wf.current_state(root, task_id)})
+            raise
         path = _wf.export_handoff(root, correction)
+        # Close THIS action's own loop automatically -- the same class of gap
+        # found live for EVALUATE_CANONICAL_TASK_COMPLETION above: the source
+        # task's own next_action.json was otherwise left showing the
+        # pre-dispatch AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF/
+        # auto_actionable=true record forever, indistinguishable from "never
+        # executed" to any reader of that one file (confirmed live against
+        # the real M7-V1-CHATGPT-ARCHITECTURE-REVIEW-002 state: state.json
+        # correctly advanced to WAITING_FOR_HUMAN_TRANSPORT but next_action.json
+        # did not). export_handoff() already transitioned the real workflow
+        # state to WAITING_FOR_HUMAN_TRANSPORT -- this only makes that outcome
+        # legible from next_action.json too, it never re-decides anything.
+        persist_next_action(root, task_id, NextActionRecord(
+            event="AUTO_GENERATE_CORRECTION_REQUEST_HANDOFF",
+            next_action="EXECUTED:WAITING_FOR_HUMAN_TRANSPORT",
+            next_action_reason=(
+                f"correction request handoff exported to {path}; real workflow state "
+                "advanced to WAITING_FOR_HUMAN_TRANSPORT via export_handoff()"
+            ),
+            next_action_owner="HUMAN",
+            auto_actionable=False,
+            human_action_required="YES",
+            stop_reason="HUMAN_TRANSPORT_REQUIRED",
+        ))
         return DispatchOutcome(task_id, action, DISPATCH_EXECUTED, {"handoff_path": str(path)})
 
     if action in _DISPATCH_CURRENT_SESSION_EXECUTOR_ACTIONS:
