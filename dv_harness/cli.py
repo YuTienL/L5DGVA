@@ -782,6 +782,20 @@ def main():
              "router.resolve_research_intent() an unassisted request goes through. Used only "
              "when no mode flag and at most one document are given.")
 
+    # M8 Cohort 3 (CAP-M4.6-002 / GAP-M8-005): the real production caller
+    # for governance_registry.resolve_governance_intent() -- the same
+    # shape as the "research" verb above, mirroring
+    # router.resolve_research_intent()'s own production entry point.
+    pgl = sub.add_parser("governance-lookup",
+        help="Classify a free-text task description against this project's own TASK_SCOPED "
+             "governance_registry.json entries and print the best-matching governance "
+             "document (or a structured resolved:false when nothing overlaps). Prints the "
+             "resolution only; it does not load or summarize the document's own content.")
+    pgl.add_argument("query", nargs="+",
+        help="A natural-language description of the task at hand, classified by "
+             "governance_registry.resolve_governance_intent() the same way an unassisted "
+             "request would be.")
+
     # Mutation testing of THIS repo's own Python test suite. Sits next to
     # self-audit because it answers the neighbouring question: self-audit asks
     # "is the repo's declared state self-consistent", this asks "would the
@@ -4705,6 +4719,11 @@ def main():
               f"Nothing proceeds past the Human Approval Gate without "
               f"`dv-harness approve {plan['human_approval_stage']} "
               f"--note ... --reviewer-id ...`.")
+    elif args.cmd == "governance-lookup":
+        from . import governance_registry as _gr
+        result = _gr.resolve_governance_intent(h.root, {"task_description": " ".join(args.query)})
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        raise SystemExit(0 if result["resolved"] else 1)
     elif args.cmd == "audit":
         from .dashboard import _audit_trail
         print(json.dumps(_audit_trail(h.root, args.limit), ensure_ascii=False, indent=2))
