@@ -1132,3 +1132,71 @@ its scope is not modified. No new Codex/ChatGPT review was started. No
 REVIEW-002 transport was performed. No Post-M7 hardening was performed.
 `REFERENCE_USB_ENV_CONSUMED` remains NO. Waiting for a separate, explicit
 dispatch before M8 Preflight begins.**
+
+## M8 CLOSURE (2026-09-29) -- M8_STATUS = CLOSED_WITH_KNOWN_LIMITATIONS
+
+Supersedes the `M8 = NEXT_PLANNED_MILESTONE, NOT_STARTED` line in the
+section above **as current status only** -- that section is preserved
+unedited as the real historical snapshot of the M7-closure moment, not
+overwritten. M8 ran its own full Preflight -> Cohort 1 -> Cohort 2 ->
+Cohort 3 -> Cohort 4 -> Cohort 5 -> Cohort H -> Final Convergence sequence
+in this same session (commits `956db46`, `124171e`, `f627542`, `b9ceb77`,
+`223cd0e`, `8724485`, `d8a973b`, plus this closure reconciliation).
+
+```
+M8_STATUS = CLOSED_WITH_KNOWN_LIMITATIONS
+```
+
+**Closure evidence pointer**: `.work/phase3-dual-repo-consolidation/
+M6_PREFLIGHT/M8_FINAL_CONVERGENCE_AND_CLOSURE_REPORT.md` (the full
+16-criterion re-derivation, Gap Register final reconciliation, and
+per-capability final states); the 7 per-cohort `M8_COHORT_*_FINAL_
+REPORT.md` files for the detailed build history of each real edge closed.
+
+```
+M8_EXIT_CRITERIA = 14 PASS / 2 PARTIAL / 0 FAIL / 0 NOT_APPLICABLE (of 16)
+```
+
+**Known limitations / deferred items** (none block closure; each carries
+its own governed disposition -- full detail in the closure report):
+- `CAP-HITL-008`/`CAP-HITL-009`'s own future 16-field Role-Aware
+  Experience Record schema -- disclosed roadmap, not built.
+- `GAP-M8-011` (`FUTURE_MILESTONE_CAPABILITY`, OPEN): 4 of the Constitution's
+  13 Final-Acceptance sub-criteria (the 3 per-verification-level END_TO_END
+  rows, `CANONICAL_CAPABILITY_STRICT_SUPERSET`) have no real evaluator
+  anywhere -- large, future-milestone-scale work.
+- `GAP-M8-003` (`NON_BLOCKING_HARDENING`, OPEN): Organizational Memory's
+  own local-persistence question (configure a real remote KC / build a
+  local fallback / explicitly accept as a permanent architectural
+  boundary) remains an undecided, disclosed choice.
+- `KNOWLEDGE_CONSUMPTION`/`KNOWLEDGE_ACTION_INFLUENCE` (the two deepest
+  levels of the 5-level knowledge-loop model) remain `NOT_PROVEN`/
+  `OUT_OF_SCOPE` -- storage, discoverability, and retrieval are all real
+  and proven; no evidence yet that a real production workflow consumes or
+  acts on retrieved knowledge.
+- `VPLAN_TO_COVERAGE_SIGNOFF`/`REQUIREMENTS_TRACEABILITY` Constitution
+  sub-criteria read FAIL for this meta-repo's own lack of a real
+  generated-environment vplan/coverage/signoff run -- an honest reflection
+  of this repo's own nature (the DV harness itself, not a DUT verification
+  project), not a code defect.
+
+```
+Q-ENV-57D420FA               = OPEN, Tier 3, HUMAN_AUTHORITY, does not
+                                block M8 closure (re-confirmed)
+REFERENCE_USB_ENV_CONSUMED   = NO (unchanged throughout M8)
+SOURCE_CAPABILITY_LOSS       = 0
+FROZEN_SOURCE_CHANGES        = 0 (Parent 3e9dd7360f58, v50 f3fd17326cf3,
+                                b7a 7b2a65a4dc2d, b7b c7c7fa09e9ee,
+                                b8 c9cdd06ce586 -- all unchanged)
+```
+
+**Next Canonical milestone**: `M9` (ExecutionService/RemoteEDABackend
+TARGET, generic 3-level role model), per this file's own "Exact ordered
+remaining-wave sequence" section above -- **not** Wave 3/USB Generation
+Vertical Slice (that is `M11`, several waves later). `M9` is not started
+by this reconciliation.
+
+**STOP. This is a closure/documentation reconciliation only. No
+production source file was changed by this closure (`PRODUCTION_FILES_
+CHANGED = 0`). No new implementation cohort was started. `M9` is not
+started. Reference USB remains unconsumed.**
