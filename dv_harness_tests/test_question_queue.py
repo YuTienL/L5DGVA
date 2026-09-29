@@ -2277,3 +2277,123 @@ def test_answer_question_clarification_learning_does_not_cross_project_correlate
     assert not (root_b / ".dv-harness" / "events.jsonl").exists()
     events_a = [e for e in _events(root_a) if e.get("event") == "CLARIFICATION_LEARNING_PROMOTED"]
     assert len(events_a) == 1
+
+
+# --- M8 Cohort 4 (CAP-HITL-008 ROLE_AWARE_EXPERIENCE_LEARNING): role
+# information preserved from the real authority_role signal through to
+# the CLARIFICATION_LEARNING experience record -----------------------------
+
+def test_answer_question_preserves_real_authority_role_into_experience_record(tmp_path):
+    # THE GAP THIS CLOSES: a question filed with a real, already-classified
+    # authority_role (CAP-M6-CLARSVC-001's own existing, wired production
+    # chain: clarification_service.classify_question_owner() -> file_
+    # clarification(authority_role=owner) -> add_question()) previously had
+    # that role information discarded the moment it reached the
+    # Experience-learning loop. It must now survive onto the promoted
+    # record's own knowledge_domain/human_role fields.
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is this reset polarity active-low by design intent?",
+        context_path="dut.regs.RESET_CTRL", options=_opts(),
+        recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        authority_role="DESIGN",
+    )
+    assert q["authority_role"] == "DESIGN"
+    store.answer_question(q["id"], answer="Yes, active-low.", basis="RTL reset_ctrl.sv",
+                            decided_by="designer@example.com")
+
+    promoted = [e for e in _events(tmp_path) if e.get("event") == "CLARIFICATION_LEARNING_PROMOTED"]
+    assert len(promoted) == 1
+    memory_id = promoted[0]["promotion"]["memory_id"]
+
+    from dv_harness.memory import MemoryStore
+    mem = MemoryStore(tmp_path).get(memory_id)
+    assert mem["knowledge_domain"] == "DESIGN"
+    assert mem["human_role"] == "DESIGN"
+
+
+def test_answer_question_unclassified_when_authority_role_never_set(tmp_path):
+    # Backward compatibility: a question filed through an older/
+    # uninstrumented caller (authority_role never supplied, the default)
+    # must not be silently dropped or falsely classified -- it gets the
+    # explicit UNCLASSIFIED sentinel, exactly like Cohort 1/2/3's own
+    # existing questions predating this cohort would.
+    from dv_harness.experience_record import UNCLASSIFIED
+    store = QuestionQueueStore(tmp_path)
+    q = store.add_question(
+        domain="dut", question="Is register R9 write-1-to-clear?", context_path="dut.regs.R9",
+        options=_opts(), recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+    )
+    assert q["authority_role"] is None
+    store.answer_question(q["id"], answer="Yes.", basis="RTL", decided_by="designer@example.com")
+
+    promoted = [e for e in _events(tmp_path) if e.get("event") == "CLARIFICATION_LEARNING_PROMOTED"]
+    memory_id = promoted[0]["promotion"]["memory_id"]
+
+    from dv_harness.memory import MemoryStore
+    mem = MemoryStore(tmp_path).get(memory_id)
+    assert mem["knowledge_domain"] == UNCLASSIFIED
+    assert mem["human_role"] == UNCLASSIFIED
+
+
+def test_role_aware_retrieval_distinguishes_design_from_verification(tmp_path):
+    # LIVE_QUALIFICATION (Cohort 4's own required "real retrieval scenario
+    # distinguishing at least 2 roles/domains with different results"):
+    # zero new retrieval code -- memory.py's own pre-existing, generic
+    # `property` filter (MemoryRetriever.search()'s property_filters/
+    # _record_field()) already supports this once the field exists on the
+    # record, proven here for real.
+    store = QuestionQueueStore(tmp_path)
+    q_design = store.add_question(
+        domain="dut", question="Is this register's reset value 0x0 by design intent?",
+        context_path="dut.regs.CTRL", options=_opts(),
+        recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        authority_role="DESIGN",
+    )
+    store.answer_question(q_design["id"], answer="Yes.", basis="RTL", decided_by="designer@example.com")
+
+    q_verif = store.add_question(
+        domain="env", question="Should the scoreboard treat this as a golden-model mismatch?",
+        context_path="tb.scoreboard", options=_opts(),
+        recommendation=_opts()[0]["label"], assumption_if_unanswered="n/a",
+        authority_role="VERIFICATION",
+    )
+    store.answer_question(q_verif["id"], answer="Yes.", basis="scoreboard spec",
+                            decided_by="dv-lead@example.com")
+
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    retriever = MemoryRetriever(MemoryStore(tmp_path))
+    design_hits = retriever.search({"text": "clarification", "property": {"knowledge_domain": "DESIGN"}})
+    verification_hits = retriever.search({"text": "clarification", "property": {"knowledge_domain": "VERIFICATION"}})
+
+    design_titles = {h["memory"]["title"] for h in design_hits}
+    verification_titles = {h["memory"]["title"] for h in verification_hits}
+    assert design_titles == {f"Clarification answered: {q_design['domain']}"}
+    assert verification_titles == {f"Clarification answered: {q_verif['domain']}"}
+    assert design_titles != verification_titles
+
+
+def test_role_scoped_search_excludes_pre_cohort_4_historical_records(tmp_path):
+    # Compatibility with existing unclassified historical knowledge: a
+    # record written BEFORE this cohort (no knowledge_domain/human_role
+    # key at all, not even the UNCLASSIFIED sentinel -- exactly the shape
+    # every ENGINEERING_MEMORY record from the 5 pre-Cohort-4 promotion
+    # call sites already has) must not crash the property filter and must
+    # not falsely match a role/domain-scoped query -- memory.py's own
+    # pre-existing _property_matches()/_record_field() already handle an
+    # absent key as a real "no match", proven here rather than assumed.
+    from dv_harness.memory import MemoryStore, MemoryRetriever
+    store = MemoryStore(tmp_path)
+    store.add("engineering", {
+        "title": "Pre-Cohort-4 legacy engineering lesson", "kind": "debug_lesson",
+        "verified": True, "root_cause": "legacy root cause, no role/domain field at all",
+        "confidence": "HIGH",
+    })
+    retriever = MemoryRetriever(store)
+    hits = retriever.search({"text": "legacy engineering lesson", "property": {"knowledge_domain": "DESIGN"}})
+    assert hits == []
+    # The same record IS found by an unscoped (no property filter) query --
+    # historical knowledge stays fully discoverable, just not role/domain-
+    # filterable.
+    unscoped = retriever.search({"text": "legacy engineering lesson"})
+    assert len(unscoped) == 1

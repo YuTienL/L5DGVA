@@ -71,3 +71,59 @@ def test_build_experience_record_routes_to_engineering_memory():
         lesson="l", evidence="e",
     )
     assert route_memory(record) == "ENGINEERING_MEMORY"
+
+
+# --- M8 Cohort 4 (CAP-HITL-008 / CAP-HITL-009): role/domain metadata -------
+
+def test_build_experience_record_defaults_role_domain_to_unclassified():
+    # Backward compatibility: a caller supplying neither field (every
+    # Cohort-2 call site before this cohort, and GENERATION_EXPERIENCE_
+    # LEARNING/SIGNOFF_EXPERIENCE_CONSOLIDATION today, which have no real
+    # per-record role signal) gets an explicit sentinel, never a silent
+    # None/omission.
+    from dv_harness.experience_record import UNCLASSIFIED
+    record = build_experience_record(
+        experience_type="GENERATION_EXPERIENCE_LEARNING", title="t", pattern="p",
+        lesson="l", evidence="e",
+    )
+    assert record["knowledge_domain"] == UNCLASSIFIED
+    assert record["human_role"] == UNCLASSIFIED
+
+
+@pytest.mark.parametrize("value", ["DESIGN", "VERIFICATION", "SHARED"])
+def test_build_experience_record_accepts_the_real_3_value_taxonomy(value):
+    # Same taxonomy clarification_service.QUESTION_OWNERS already defines
+    # and classify_question_owner() already computes for real, production-
+    # filed intake questions -- not a new, parallel vocabulary.
+    record = build_experience_record(
+        experience_type="CLARIFICATION_LEARNING", title="t", pattern="p",
+        lesson="l", evidence="e", knowledge_domain=value, human_role=value,
+    )
+    assert record["knowledge_domain"] == value
+    assert record["human_role"] == value
+
+
+def test_build_experience_record_rejects_invalid_knowledge_domain():
+    with pytest.raises(ValueError):
+        build_experience_record(
+            experience_type="CLARIFICATION_LEARNING", title="t", pattern="p",
+            lesson="l", evidence="e", knowledge_domain="NOT_A_REAL_DOMAIN",
+        )
+
+
+def test_build_experience_record_rejects_invalid_human_role():
+    with pytest.raises(ValueError):
+        build_experience_record(
+            experience_type="CLARIFICATION_LEARNING", title="t", pattern="p",
+            lesson="l", evidence="e", human_role="NOT_A_REAL_ROLE",
+        )
+
+
+def test_role_domain_values_match_clarification_service_taxonomy():
+    # Provenance check, not a duplicated definition: this module's own
+    # ROLE_DOMAIN_VALUES must stay byte-identical to clarification_
+    # service.QUESTION_OWNERS -- the one real, already-built classifier's
+    # own vocabulary -- so the two never silently drift apart.
+    from dv_harness.experience_record import ROLE_DOMAIN_VALUES
+    from dv_harness.clarification_service import QUESTION_OWNERS
+    assert set(ROLE_DOMAIN_VALUES) == set(QUESTION_OWNERS)

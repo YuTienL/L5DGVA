@@ -1752,6 +1752,23 @@ class QuestionQueueStore:
             from .memory_router import route_and_store
             from .storage import StateStore
             from .config import load_config
+            # M8 Cohort 4 (CAP-HITL-008): `authority_role` is a real,
+            # already-classified field on `target` whenever this question
+            # was filed through clarification_service.py's own real
+            # resolve/file path (classify_question_owner() -> file_
+            # clarification(authority_role=owner) -> add_question()) --
+            # CAP-M6-CLARSVC-001's own existing production chain, reused
+            # verbatim here rather than re-classified. None for a question
+            # filed through an older/uninstrumented caller: build_
+            # experience_record() turns that into the explicit
+            # UNCLASSIFIED sentinel, never a silent omission (backward
+            # compatibility -- see that function's own docstring). THE GAP
+            # THIS CLOSES: DE_DV_ROLE_BASED_HITL_ARCHITECTURE.md Section 24
+            # names role information being "preserved through to the
+            # learning loop, not discarded after the decision is made" as
+            # the CONTINUOUS_EVOLUTION alignment target -- previously this
+            # exact hook discarded it.
+            role = target.get("authority_role")
             record = build_experience_record(
                 experience_type="CLARIFICATION_LEARNING",
                 title=f"Clarification answered: {target['domain']}",
@@ -1759,6 +1776,8 @@ class QuestionQueueStore:
                 lesson=f"Answer: {answer}",
                 evidence=f"basis={basis}; decided_by={decided_by}; overturned={overturned}",
                 applicability_constraints=target.get("context_path", ""),
+                knowledge_domain=role,
+                human_role=role,
             )
             promotion = route_and_store(self.root, record, cfg=load_config(self.root))
         except Exception as exc:
