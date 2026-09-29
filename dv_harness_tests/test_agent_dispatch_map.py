@@ -196,3 +196,36 @@ def test_dispatch_status_counts_agree_with_the_map():
     m = agent_dispatch_map(ROOT)
     assert sum(counts.values()) == len(m)
     assert counts[GRAPH_DISPATCHED] >= 10, "core dispatched roles disappeared"
+
+
+# M8 Cohort H (GAP-M8-004): every agent profile that tells the dispatched
+# agent it may search prior memory must name the real, redaction/ranking-
+# aware retrieval API explicitly -- never leave it as prose vague enough
+# that a dispatched agent could satisfy it by Grep/Read-ing raw
+# .dv-harness/memory/** files instead. memory-agent.md already does this;
+# debug-agent.md previously did not (fixed this cohort).
+_REAL_MEMORY_RETRIEVAL_API_MARKERS = ("MemoryRetriever", "memory_cli", "memory-retrieval")
+
+
+def test_every_agent_profile_referencing_memory_retrieval_names_the_real_api():
+    violations = []
+    for path in list_agent_files(ROOT):
+        text = path.read_text(encoding="utf-8")
+        # "references memory retrieval": mentions searching/consulting prior
+        # verified memory as part of its own workflow instructions.
+        mentions_retrieval = ("verified memory" in text) or ("memory retriev" in text.lower())
+        if not mentions_retrieval:
+            continue
+        if not any(marker in text for marker in _REAL_MEMORY_RETRIEVAL_API_MARKERS):
+            violations.append(path.name)
+    assert violations == [], (
+        f"agent profile(s) reference memory retrieval without naming the real API "
+        f"({_REAL_MEMORY_RETRIEVAL_API_MARKERS}): {violations}")
+
+
+def test_debug_agent_names_the_real_memory_retrieval_api():
+    # Positive, direct proof (not just the negative sweep above) that
+    # GAP-M8-004's own named example is actually fixed.
+    text = (ROOT / ".claude" / "agents" / "debug-agent.md").read_text(encoding="utf-8")
+    assert "MemoryRetriever" in text or "memory_cli" in text
+    assert "CORE/memory-retrieval" in text

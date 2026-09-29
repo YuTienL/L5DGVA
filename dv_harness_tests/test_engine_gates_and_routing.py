@@ -1869,6 +1869,165 @@ def test_promotion_chain_audit_gate_applies_uniformly_on_the_failure_path(tmp_pa
     assert out["reason"] == "EXPERIENCE_READY_NOT_VERIFIED", out
 
 
+# --- M8 Cohort H (GAP-M8-010): closed_loop_promotion_gate's own sibling
+# experience_capture_status self-attestation loophole, closed with the SAME
+# shared dv_harness.promotion_evidence corroboration check GAP-M8-001 built
+# for promotion_chain_audit_gate's EXPERIENCE_READY stage -----------------
+
+def _closed_loop_payload(*, experience_capture_status="CAPTURED"):
+    return {
+        "passed_stages": ["INTAKE_READY", "VPLAN_READY", "ARCHITECTURE_READY",
+                           "MECHANISM_READY", "TESTS_READY", "EXECUTION_EVIDENCE_READY",
+                           "COVERAGE_QUALITY_READY"],
+        "failure_detected": False,
+        "expert_feedback_reviewed": True,
+        "experience_capture_status": experience_capture_status,
+    }
+
+
+def test_closed_loop_promotion_gate_rejects_bare_captured_self_attestation(tmp_path):
+    # No false success when evidence source is absent: no .dv-harness/
+    # events.jsonl exists for this project -- a bare experience_capture_
+    # status=CAPTURED claim must be rejected, not accepted the way it
+    # always was before this fix.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_accepts_verified_experience_capture(tmp_path):
+    # Real corroborating promotion evidence accepted: the exact shape
+    # engine.py's own _promote_experience_knowledge() already writes via
+    # route_and_store()+self.store.event() makes the same claim PASS.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PROMOTABLE", out
+
+
+def test_closed_loop_promotion_gate_not_applicable_still_exempt_with_no_evidence(tmp_path):
+    # experience_capture_status=NOT_APPLICABLE is a legitimate,
+    # non-suspicious claim ("no experience capture was expected this
+    # run"), never a claim that a real promotion occurred -- must remain
+    # exempt from the new corroboration check, matching the pre-existing
+    # shared test's own fixture shape (test_promotion_readiness_feature_
+    # continuity_gate_context_and_evidence_flag) and preserving backward
+    # compatibility with every existing caller that uses it.
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(experience_capture_status="NOT_APPLICABLE"), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PROMOTABLE", out
+
+
+def test_closed_loop_promotion_gate_rejects_failed_promotion_as_evidence(tmp_path):
+    # A real route_and_store() call happened but FAILED (engine.py's own
+    # except-branch shape) -- not proof anything was actually promoted.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "PROMOTION_FAILED", "error": "disk full"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_ignores_unrelated_event_names(tmp_path):
+    # Malformed/invalid evidence: a real, successfully-written event
+    # exists, but under a name outside REAL_PROMOTION_EVENTS entirely.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "SOME_UNRELATED_TELEMETRY_EVENT", "detail": "noise",
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_rejects_wrong_project_correlation(tmp_path):
+    # Wrong-project evidence rejected: a real, successful promotion event
+    # exists, but in a DIFFERENT project's events.jsonl.
+    from dv_harness.storage import StateStore
+    audited_root = tmp_path / "project_a"
+    other_root = tmp_path / "project_b"
+    audited_root.mkdir()
+    other_root.mkdir()
+    StateStore(other_root).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m2"},
+    })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), audited_root,
+    )
+    assert rc != 0 and out["status"] == "FAIL"
+    assert out["reason"] == "EXPERIENCE_CAPTURE_NOT_VERIFIED", out
+
+
+def test_closed_loop_promotion_gate_duplicate_promotion_events_still_pass_once(tmp_path):
+    # Duplicate event remains idempotent: two real corroborating events
+    # must not confuse the check -- it simply PASSes once real evidence
+    # is present, duplicates or not.
+    from dv_harness.storage import StateStore
+    store = StateStore(tmp_path)
+    for i in range(2):
+        store.event({
+            "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+            "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+            "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": f"m{i}"},
+        })
+    rc, out = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc == 0 and out["status"] == "PROMOTABLE", out
+
+
+def test_promotion_chain_audit_gate_and_closed_loop_promotion_gate_agree(tmp_path):
+    # Both relevant gate paths behave consistently: the SAME real
+    # corroborating event, in the SAME project root, makes BOTH sibling
+    # gates' own self-attested claim (EXPERIENCE_READY and
+    # experience_capture_status=CAPTURED) pass together -- proving they
+    # share the identical real evidence check (dv_harness.promotion_
+    # evidence), not two independently-drifting implementations.
+    from dv_harness.storage import StateStore
+    StateStore(tmp_path).event({
+        "ts": "2026-09-29T00:00:00+00:00", "stage": "GENERATION",
+        "event": "EXPERIENCE_KNOWLEDGE_PROMOTED", "record_kind": "debug_lesson",
+        "promotion": {"destination": "ENGINEERING_MEMORY", "memory_id": "m1"},
+    })
+    rc1, out1 = _run_gate_script_with_project_root(
+        "verification_flow/promotion_chain_audit_gate.py", "--audit",
+        _promotion_chain_audit_payload(), tmp_path,
+    )
+    rc2, out2 = _run_gate_script_with_project_root(
+        "verification_flow/closed_loop_promotion_gate.py", "--state",
+        _closed_loop_payload(), tmp_path,
+    )
+    assert rc1 == 0 and out1["status"] == "PASS", out1
+    assert rc2 == 0 and out2["status"] == "PROMOTABLE", out2
+
+
 def test_expert_feedback_loop_requires_experience_knowledge_gate():
     # Experience Learning Loop: EXPERIENCE_READY was previously a dangling
     # reference -- no stage actually produced it. experience_knowledge_gate
